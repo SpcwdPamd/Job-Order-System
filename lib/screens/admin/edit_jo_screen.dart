@@ -1738,7 +1738,6 @@ class _EditPersonnelTabState extends State<EditPersonnelTab> {
   bool _isLoading = true;
   final _searchCtrl  = TextEditingController();
   final _nameCtrl    = TextEditingController();
-// ── REMOVED: _contactCtrl and _addressCtrl ──
   String? _selectedPosition;
   File?   _selectedImage;
   final List<String> _positions = ['Team Leader', 'Member', 'Driver'];
@@ -2154,7 +2153,6 @@ class _EditPersonnelTabState extends State<EditPersonnelTab> {
         try {
           await Supabase.instance.client.from('personnel').insert({
             'name'           : name,
-// ── REMOVED: contact_number and address fields ──
             'position'       : _selectedPosition,
             'profile_pic_url': url,
           });
