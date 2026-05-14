@@ -1,0 +1,505 @@
+SPCWD Job Order System
+San Pablo City Water District — Desktop Management App
+Built with Flutter + Supabase
+
+
+What This App Does
+
+This is the desktop-side management app for the San Pablo City Water District's job order operations.
+Office staff use this to receive water-related complaints from the public, create job orders, assign field teams, track progress, and generate monthly reports — all in one place.
+
+The field teams have a separate mobile app that receives the job assignments and marks them as accomplished.
+This desktop app is what the admin and office staff use to manage everything from the backend.
+
+
+Tech Stack
+
+Framework - Flutter (Desktop)
+Backend / Database - Supabase (PostgreSQL)
+ Authentication - Custom username + password via `users` table
+ Charts - `fl_chart`
+PDF Export - `pdf` + `printing` packages
+Image Upload - `image_picker` + Supabase Storage
+
+-User Roles
+
+The app has 3 types of users, all stored in the `users` table in Supabase:
+
+`admin` - Full access to everything — all screens, all admin features
+ `sub_admin` - Regular user with specific permissions granted by the admin (can access admin panel, edit reports, or both)
+ `user` - Standard office staff — can create complaints, assign teams, mark accomplished, view reports
+
+Field teams use a completely separate system the PAMD mobile app via the `profiles` table (not `users`). They log in with a username + password, no email required.
+
+
+Supabase Database Tables
+
+Here are the main tables the app reads from and writes to:
+
+
+`users` - Office/admin accounts with roles and permissions
+ `profiles` - Field team mobile app accounts (username + password_hash)
+ `teams`  Team groups with a foreman, driver, and list of members
+ `personnel`  Individual field workers (Team Leaders, Drivers, Members)
+ `job_orders` All job orders — pending, accomplished, and deleted
+ `skeletal_job`  Unofficial/custom job assignments not tied to formal J.O. numbers
+ `work_types`  The dropdown options for "Type of Work" in the job order form
+ `damage_spaces`  The dropdown options for "Damaged Working Space" in the form
+ `team_notifications`  Notifications sent to the mobile app when jobs are assigned or accomplished
+| `team_monthly_logs` Monthly snapshots of each team's lineup (leader, driver, members)
+---
+How to Switch Supabase Accounts
+
+Open `main.dart` and replace these two values with your new project's credentials:
+
+dart
+await Supabase.initialize(
+  url: ',   // ← change this
+  anonKey: ,                   // ← and this
+);
+
+
+Find your URL and anon key in: Supabase Dashboard → Settings → API
+
+
+ File-by-File Breakdown
+
+
+ -main.dart-
+The starting point of the entire application.
+
+This is the first file Flutter runs. It does three things in order:
+1. Initializes Supabase with the project URL and anon key
+2. Pre-loads the work types and damage spaces from Supabase (so dropdowns are ready before the user opens any form)
+3. Launches the app and wraps everything with the theme provider and connectivity overlay
+
+If you're switching Supabase accounts, this is the only file you need to change.
+
+
+-session.dart-
+Stores the currently logged-in user's data for the whole app session.
+
+After a successful login, the user's ID, name, username, role, and permission flags are saved here as a global singleton (`AppSession.instance`). Any screen in the app can read from it without needing to pass data through constructors.
+
+Key getters:
+- `isAdmin` — true if role is `admin`
+- `isSubAdmin` — true if role is `sub_admin`
+- `canAccessAdmin` — true for full admins OR sub-admins with the panel permission
+- `canEditReports` — true for full admins OR sub-admins with the reports permission
+- `initial` — first letter of the user's name, used for the avatar in the sidebar
+
+On sign-out, `clear()` is called to wipe all stored data.
+
+
+`theme_provider.dart`
+The design system token file — controls every color, shadow, and style in the app.
+
+The `Tk` class holds all design tokens (colors, shadows, etc.) in both light and dark variations. Instead of hardcoding `Color(0xFF1D6FE8)` everywhere, every screen just writes `_tk.blue` and the right shade is automatically picked based on the current mode.
+
+Key parts:
+- `Tk` class — the token holder. Pass `Tk(true)` for dark mode, `Tk()` for light
+- `ThemeNotifier` — a global `ChangeNotifier` that lets the dark mode toggle button update the whole app
+- `TkProvider` — an `InheritedWidget` that carries `Tk` down the widget tree
+- `context.tk` — a shortcut extension so any widget can grab the current theme in one line
+- `workColor(code)` — returns the accent color for a given work type code (101=blue, 102=cyan, etc.)
+- `diffColor(level)` — returns green/amber/red for Minor/Moderate/Major difficulty
+
+
+`pending_users_notifier.dart`
+A global counter that tracks how many user accounts are waiting for admin approval.
+
+This is a `ValueNotifier<int>` shared across the app.
+The sidebar Admin badge and the admin hub tile both listen to it and update automatically whenever the count changes — no manual refreshing needed.It is the notification counts.
+
+- `refresh()` — queries the `users` table for rows with `status = 'pending'` and updates the value
+- Called at app startup, when opening the Admin page, and after approving/rejecting a user
+
+ `admin_data.dart`
+manages the work types and damage spaces that appear in job order form dropdowns.
+
+Instead of hardcoding the dropdown options in the code, we stored them in Supabase so admins can add, edit, or delete them without a code update. This file has two `ChangeNotifier` classes — one for each table.
+
+- `WorkTypesNotifier` — reads/writes the `work_types` table
+- `DamageSpacesNotifier` — reads/writes the `damage_spaces` table
+- Both expose `fetch()`, `add()`, `update()`, and `remove()` methods
+- `initAdminData()` — called in `main.dart` at startup to load both lists in parallel
+- `workTypesNotifier` and `damageSpacesNotifier`are global singletons imported wherever dropdowns are needed
+
+ `notification_helper.dart`
+Writes notification rows to Supabase whenever a job is assigned or marked accomplished
+
+The mobile app reads from the `team_notifications` table to show the field team what's new. This helper is a static utility class — no instantiation needed, just call the methods directly.
+
+- `notifyJobAssigned(...)` — fires when an office user assigns a team to a job. Inserts a row with `type: 'new_job'`
+- `notifyJobAccomplished(...)` — fires when a job is marked done. Inserts a row with `type: 'accomplished'`
+- Errors are caught silently — a failed notification should never interrupt the main save operation
+
+
+
+ `ds.dart`
+The shared widget library — reusable UI components used across every screen.
+This is the "building block" file. Almost every screen imports this to get standard widgets that stay consistent with the design system.
+
+
+ `DsHeader` - The top bar with icon, title, subtitle, and optional action buttons — used on every main screen
+ `DsCard` - A themed surface card with border and shadow
+ `DsLabel` - A small uppercase section label (e.g. "USER MANAGEMENT")
+ `DsTag` - A color-coded pill/badge (e.g. "Pending", "Done", "Leader")
+ `DsSearchBar` - A themed search field with a clear button
+ `DsLoading` - A centered loading spinner shown while data is fetching
+ `DsEmpty` - A centered empty state with an icon and message
+ `dsInputOf(context, label)` - Returns an `InputDecoration` that matches the current theme — used on all text fields
+
+ `connectivity_wrapper.dart`
+Shows a full-screen "No Internet" overlay whenever the device loses connection.**
+
+Every 4 seconds, it does a real DNS lookup to `google.com` to check if there's an actual working internet connection (not just WiFi with no internet). If the check fails, it slides up a dark overlay that blocks all interaction until connectivity is restored.
+
+- Uses `InternetAddress.lookup()` with a 5-second timeout for the real check
+- Has a "Try Again" button for manual retry
+- Wraps the entire app inside `MaterialApp`'s `builder` so it covers every screen
+
+ `login_screen.dart`
+The login page and the sign-up page. First thing users see when they open the app.
+
+The login screen queries the `users` table directly — no Supabase Auth, just a username + password match. It checks the account's `status` field and blocks login if the account is `pending`, `rejected`, or `blocked`.
+
+On successful login:
+1. The user's data is saved to `AppSession.instance`
+2. The app navigates to `MainScreen` with a fade transition
+
+The sign-up screen (also in this file) creates a new row in the `users` table with `status: 'pending'`. The account won't work until an admin approves it.
+
+The animated background (floating glowing blobs) is handled by `_AnimatedBg` using an `AnimationController` that repeats every 8 seconds.
+
+Also contains `SignUpScreen`, `_AuthLabel`, `_AuthField`, `_AuthButton`, `_AuthErrorBanner`, `_AuthSuccessBanner`, and `_LeftPanel` (the branding panel on the left side of the card).
+
+
+ `signup_screen.dart`
+Just re-exports `SignUpScreen` from `login_screen.dart`.**
+
+Since `SignUpScreen` is defined inside `login_screen.dart` (to share auth widget code), this file is a thin re-export so other parts of the app can import it cleanly without importing the whole login screen file.
+
+
+ `main_screen.dart`
+The main shell of the app after login — contains the sidebar navigation and all screens.
+
+This is what users see after logging in. It's a persistent layout with a collapsible sidebar on the left and the active screen taking up the rest of the space.
+
+Sidebar items:
+
+| Index | Screen | Who Sees It |
+|-------|--------|-------------|
+| 0 | Dashboard | Everyone |
+| 1 | Complaints (Job Order) | Everyone |
+| 2 | Job Orders (Team Jobs) | Everyone |
+| 3 | Skeletal Jobs | Everyone |
+| 4 | Team Status | Everyone |
+| 5 | Accomplished | Everyone |
+| 6 | Monthly Report | Everyone |
+| 7 | Overall Report | Everyone |
+| 8 | Relocation Report | Everyone |
+| 9 | Settings | Everyone |
+| 10 | Admin | Only `canAccessAdmin` users |
+
+Key features:
+- The sidebar can be fold to just icons to save space in the sidebar.
+- The -Reports- section is a collapsible group inside the sidebar
+- The -Admin- tile shows a red badge with the count of pending user approvals (live from `pendingUsersNotifier`)
+- The -dark mode toggle- in the dashboard updates `themeNotifier`, which triggers a rebuild here
+- The -sign-out dialog- clears `AppSession` and navigates back to `LoginScreen`
+
+
+`dashboard_screen.dart`
+The analytics dashboard — shows charts and stats about all accomplished jobs.
+This is the first screen users see after logging in. It pulls data from both `job_orders` and `skeletal_job` tables and presents it as interactive charts.
+
+Charts included:
+- Stat cards — total Pending, Accomplished, and Completion Rate %
+- Job Order Accomplishment — a bar chart showing jobs completed over time (switch between Days / Weeks / Months / Year)
+- Work Type Distribution — a pie chart showing the breakdown of work types (excludes Restoration code 203 which gets its own chart)
+- Damaged Space Distribution — a pie chart for surface types (Concrete, Sidewalk, Earth, etc.)
+- Restoration Surface Breakdown — a separate pie chart just for Restoration (code 203) jobs
+- Work + Surface Combinations — a combo bar chart of the top 10 most common job-surface pairings
+- Surface Type by Address — a scrollable bar chart showing which barangays have the most jobs per surface type
+- Address Breakdown — four separate bar charts, one per work type group, showing job counts per barangay
+
+Filtering: Users can filter all charts by a specific month/year or view overall (all-time) data using the filter buttons at the top.
+
+Dark mode toggle lives here as the premium animated sliding switch.
+
+
+ `job_order_screen.dart
+The Complaints screen — where new complaints are entered and teams are assigned.
+
+This screen has a split two-column layout:
+- Left panel — Unassigned complaints waiting for a team
+- Right panel — Active job orders that already have a team assigned
+
+Workflow:
+1. A complaint comes in → office staff clicks "New Complaint" → fills out the form (work type, difficulty, damage space, barangay) → saves it
+2. The complaint appears in the left panel
+3. Staff clicks "Assign" on a complaint → picks a team and shift time → the complaint moves to the right panel as an official job order
+
+Key features:
+- Auto-generates the J.O. number in `YYYY-NNNNN` format (e.g. `2026-00045`) by checking the highest existing sequence
+- Stats bar shows total unassigned, active J.O. count, top work type, and difficulty breakdown
+- Newly created cards flash briefly with a blue glow so you can spot them
+- Both panels have independent search bars
+
+`team_jobs_screen.dart`
+The Job Orders screen — where assigned job orders can be edited and marked as accomplished.
+
+Shows all pending job orders that already have a team assigned. Unlike the Complaints screen, this one is for managing and completing existing orders.
+
+Key features:
+- Click any card to open the full edit dialog — change the team, shift, work type, difficulty, damage space, address, remarks, and zone
+- "Mark as Accomplished" button inside the dialog — prompts for confirmation, then sets status to `accomplished`, records who did it (`accomplished_by_user_id`), and fires a notification to the team's mobile app via `NotificationHelper.notifyJobAccomplished()`
+- Search works across J.O. number, team name, work type, shift, and address
+
+
+ `accomplished_screen.dart`
+Shows all completed job orders and skeletal jobs.
+
+Combines data from both `job_orders` (status = `accomplished`) and `skeletal_job` (status = `completed`) into one unified list, sorted by completion date.
+
+Key features:
+- Month/Year filter — pick a specific month or view all-time. Has quick tabs for "This Month" and "Overall"
+- Click any card to open a full detail view showing job info, team members with avatars, timeline, and activity log (who created it, who edited it, who accomplished it)
+- The detail view also has an Edit button that opens the full edit dialog
+- Editing is done directly in `skeletal_job` or `job_orders` depending on the type
+
+---
+
+`skeletal_team_screen.dart`
+The Skeletal Jobs screen — for unofficial or emergency assignments.
+
+"Skeletal" jobs are quick assignments that don't go through the normal complaint → job order workflow. They're used when a team is sent out immediately without the formal paperwork.
+
+Key features:
+- Create a skeletal job by picking a Leader, Driver (optional), Members, work type, difficulty, damage space, and barangay
+- "Mark as Accomplished" button moves it to the Accomplished screen
+- Deleted skeletal jobs go to the Trash Bin just like regular job orders
+
+
+`team_jo.dart`
+The Team Status screen — a visual gallery showing each team's job stats.
+Shows all teams as cards in a grid. Each card displays the team name, leader avatar, member count, pending vs accomplished counts, and a completion progress bar.
+
+Key features:
+- Click any team card to open a -detailed dialog- with tabs for Pending and Accomplished jobs
+- The detail dialog shows the full team lineup (leader, driver, members with avatars)
+- Includes a difficulty breakdown donut chart per team
+- Filter by month or view overall data
+- Works independently from the main dashboard filter
+
+`edit_jo_screen.dart`
+Admin-only screen for editing teams and personnel. Has two tabs.
+
+Tab 1 — Edit Teams:
+- Create new teams with a name, leader, driver, and members
+- Edit existing teams — change the lineup, rename the team
+- View monthly lineup history — shows a timeline of how the team composition changed month by month
+- Every time a team is created or updated, a snapshot is saved to `team_monthly_logs`
+
+Tab 2 — Edit Personnel:
+- Add new personnel (Team Leaders, Drivers, Members) with name, contact, address, position, and profile photo
+- Edit or delete existing personnel
+- Upload/remove profile photos — stored in Supabase Storage bucket `personnel-photos`
+
+This screen is opened from the Admin page under "Edit Teams" and "Edit Personnel".
+
+
+`admin_page.dart`
+The Admin hub — a menu page with tiles linking to all admin sub-sections.
+This is what admins see when they click the Admin item in the sidebar. It shows tiles for every admin function. Clicking a tile swaps the content inline (no `Navigator.push`) so the sidebar stays visible the whole time.
+Sections:
+
+
+User Approvals - Review and approve/reject/block new user sign-ups
+Team Mobile Accounts - Create/edit/delete field team login accounts for the PAMD Mobile Application.
+Edit Teams -Add or edit teams and assign members
+Edit Personnel - Add or edit individual field workers
+Delete Jobs - Select job orders to move to the Trash Bin
+Trash Bin - Restore or permanently delete trashed jobs
+Add/Edit Type of Works - Manage the work type dropdown options
+Add/Edit Damage Working Space - Manage the damage space dropdown options
+
+The -User Approvals- tile shows a live red badge with the count of pending approvals. This refreshes every time you navigate back to the hub.
+
+ `admin_user_approvals_page.dart`
+Where admins review, approve, reject, block, or delete user accounts.**
+
+Has two tabs — -Pending- (accounts waiting for approval) and -All Accounts- (everyone else).
+
+Actions per user:
+- Approve — sets `status = 'approved'`, lets the user log in
+- Reject - sets `status = 'rejected'`, shows a rejection message on login
+- Block — sets `status = 'blocked'`, locks the account
+- Roles— opens a dialog to set the user as `user` or `sub_admin` with specific permission checkboxes
+- No Photo — removes the user's profile photo URL from the database
+- Delete — permanently removes the account row
+
+The -Permissions dialog- for sub-admins lets you toggle:
+- Admin Panel Access — can see and use the Admin section
+- Edit Reports — can edit monthly, overall, and relocation reports
+
+The pending count syncs automatically with `pendingUsersNotifier` after every action.
+
+
+`admin_team_accounts_page.dart`
+Where admins create and manage login accounts for the field teams' for mobile app.
+
+These accounts are completely separate from the `users` table. They live in the `profiles` table and use **bcrypt-hashed passwords** — no email, no Supabase Auth.
+
+Actions:
+- Create Account — picks a team, enters a full name, username, and password (min 6 chars). Password is hashed with bcrypt before saving
+- Edit Account — change the username, full name, or team assignment
+- Reset Password - enter a new password, re-hashed and saved
+- Delete Account — permanently removes the profile row
+
+Accounts without a team assigned show an amber "No team" warning badge.
+
+`admin_work_types_page.dart`
+Manages the "Type of Work" dropdown options shown in the Job Order form.
+
+A simple CRUD page — admins can add new work type codes (example: "101"), give them a name, edit existing ones, or delete them. Changes are saved to the `work_types` table and immediately reflected in `workTypesNotifier` so every form dropdown updates without restarting the app.
+
+ `admin_damage_spaces_page.dart`
+Manages the "Damaged Working Space" dropdown options in the Job Order form.
+
+Same structure as the work types page but for the `damage_spaces` table. Admins add/edit/delete surface type options (Concrete/Asphalt, Sidewalk/Gutter, Earth, etc.) and they instantly update across the app.
+
+`admin_shared_widgets.dart`
+Reusable UI components shared across all admin pages.
+Instead of copy-pasting the same button and dialog styles in every admin screen, they all import from here.
+
+| Widget              | What It Does
+|---------------------|-------------------------------------------------
+| `AdminIconBtn`      | Small square icon button (used for edit/delete on list items) |
+| `AdminAddFab`       |The floating "Add" button at the bottom of admin list pages |
+| `AdminItemDialog`   | The add/edit dialog with code and name fields + form validation |
+| `AdminDeleteDialog` | The delete confirmation dialog with the item name shown |
+| `AdminOutlineBtn`   | A plain outlined button (Cancel) |
+| `AdminSolidBtn`     | A gradient-filled button (Save/Delete) |
+
+
+`delete_jobs_page.dart`
+Lets admins select multiple jobs to move to the Trash Bin.
+
+Shows all pending and accomplished job orders plus skeletal jobs in a selectable list.
+Admins tap to select, then hit "Move to Trash" to soft-delete them (sets `status = 'deleted'` — they're not gone yet).
+Jobs in the trash can be restored or permanently deleted from the Trash Bin page.
+
+ `delete_teams_page.dart`
+Lets admins permanently delete teams.
+Similar multi-select UI to the delete jobs page, but for the `teams` table. This is a -permanent delete- with no trash bin — the team row is gone immediately. A confirmation dialog appears before anything is deleted.
+
+`trash_bin_page.dart
+Shows all soft-deleted jobs and lets admins restore or permanently delete them.
+Combines trashed regular job orders and trashed skeletal jobs into one list.
+
+Actions:
+- Restore — sets the status back. Regular jobs go back to `pending`. Skeletal jobs go back to `completed` if they were done before deletion, or `pending` if they weren't
+- Delete Forever — permanently removes the row from the database. Cannot be undone
+
+`monthly_report_screen.dart`
+Generates the Monthly Accomplished Jobs Report as a printable/downloadable PDF.
+
+Pulls all accomplished job orders for the selected month/year and auto-fills a spreadsheet-like table with: number, address, foreman name, date reported, date accomplished, work type, remarks, and zone.
+
+Key features:
+- Admins and sub-admins with edit permission can click any cell to edit the text directly
+- Formatting toolbar lets you bold, italic, underline, justify, or change font size per cell
+- "Export PDF" button generates a proper legal-size landscape PDF and opens the share/download dialog
+- "Add Row" button lets you manually add extra rows that aren't in the database
+- Month/year picker is a dropdown in the header
+
+ `overall_report_screen.dart`
+Generates the Monthly Accomplishment Report (summary format) as a PDF.**
+
+This is a different, more formal document than the monthly report. It's a structured table showing cumulative numbers across three columns: Previous Month, This Month, and Total to Date.
+
+Items tracked:
+1. Complaints Received
+2. Complaints Acted Upon
+3. Service Connection Repaired
+4. Distribution Line Repaired
+5. Distribution Line Replaced (Length)
+6. Restoration
+7. Water Meter Relocated (split into two sub-items)
+
+- "This Month" numbers come live from Supabase
+- "Previous Month" numbers are editable fields (manually entered or auto-suggested from last month's data)
+- Signatories at the bottom are also editable text fields
+- Edit Mode toggle shows/hides the editing UI
+- "Print / Download" generates a short-paper (8.5×11) portrait PDF
+
+
+`relocation_report_screen.dart`
+Generates the Water Meter Relocation Report as a PDF.
+Shows all accomplished job orders with work type code `301` (Relocation) for the selected month. Displays them in a table with: date accomplished, account number, concessionaire name, address, and remarks.
+
+- All cells are editable for admins with edit permission
+- "Add Row" and "Delete Last" buttons for manual entries
+- "Export PDF" generates a legal-size landscape PDF
+
+ `settings_screen.dart`
+The user settings page — profile editing, dark mode, app info, and sign-out.
+
+Sections:
+- Profile — shows the logged-in user's name and username. "Edit Profile" opens a dialog to change the full name and/or password
+- Appearance — a premium animated light/dark mode toggle with a live preview of both themes
+- About — shows project credits (initiative, project lead, developers, beta testers) in a popup dialog
+- Account — a sign-out button that clears the session and returns to the login screen
+
+The dark mode toggle is an animated sliding switch that smoothly transitions colors and the thumb icon between sun and moon.
+
+
+`connectivity_wrapper.dart`
+Full-screen "No Internet" overlay that blocks the app when offline.
+
+Wraps the entire app. Every 4 seconds it checks for real internet access using `InternetAddress.lookup('google.com')`. If the check fails, a dark overlay slides up from the bottom blocking all interaction. When connectivity is restored, the overlay automatically slides back down.
+The overlay has a pulsing wifi-off icon, a "Try Again" manual retry button, and a small indicator showing that it's checking every 4 seconds.
+
+
+ How Everything Connects
+
+main.dart
+  └── Initializes Supabase + loads admin data
+  └── Wraps app with TkProvider + ConnectivityWrapper
+  └── Starts at LoginScreen
+
+LoginScreen
+  └── Authenticates against 'users' table
+  └── Saves data to AppSession
+  └── Navigates to MainScreen
+
+MainScreen
+  └── Sidebar with 11 navigation items
+  └── Shows the selected screen in the main area
+  └── Listens to pendingUsersNotifier for the Admin badge
+  └── Listens to themeNotifier for dark mode
+
+Each Screen
+  └── Reads AppSession for user info and permissions
+  └── Uses context.tk for all colors and styles
+  └── Queries Supabase directly for its own data
+  └── Uses DsHeader, DsLoading, DsEmpty from ds.dart
+  └── Uses workTypesNotifier / damageSpacesNotifier for dropdowns
+
+Key Design Decisions
+
+**No complex state management package** — I used Flutter's built-in `ChangeNotifier` and `ValueNotifier`. The app is simple enough that Redux or Riverpod would be overkill.
+
+**Supabase queries are done directly in each screen** — No repository layer. Each screen fetches its own data. This keeps things simple and easy to trace.
+
+**Admin sub-pages open inline** — Instead of using `Navigator.push` for admin sub-pages, they swap content in place. This keeps the sidebar visible at all times so navigation doesn't feel broken.
+
+**Soft delete before permanent delete** — Jobs are never deleted immediately. They go to a Trash Bin first (status = 'deleted') and only get permanently removed when the admin explicitly chooses "Delete Forever" from the Trash Bin.
+
+**Two separate user systems** — Office staff use the `users` table with plain password matching. Field teams use the `profiles` table with bcrypt-hashed passwords. This keeps the two systems completely independent.
+
+
+*Built for San Pablo City Water District — SPCWD Job Order Management System*
+DEVELOPERS : Rafael P. Abratique & Jan Hendrix Bueno
