@@ -323,6 +323,137 @@ class _AccomplishedScreenState extends State<AccomplishedScreen> {
   // Called every time the search bar text changes, re-runs the filter
   void _filterJobs() => _applyFilter();
 
+  // Groups _filteredJobs into an ordered list alternating between date-separator maps and job maps.
+  // Each new calendar day (local time) gets its own separator showing the date and job count for that day.
+  List<dynamic> _buildTimelineItems() {
+    final items = <dynamic>[];
+    String? lastDateKey;
+
+    // Count how many jobs fall on each local calendar date so the separator can show the total
+    final counts = <String, int>{};
+    for (final job in _filteredJobs) {
+      final ts = job['completed_at'] as String?;
+      if (ts == null) continue;
+      final dt = DateTime.parse(ts).toLocal();
+      final key = DateFormat('yyyy-MM-dd').format(dt);
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+
+    for (final job in _filteredJobs) {
+      final ts = job['completed_at'] as String?;
+      final dt = ts != null ? DateTime.parse(ts).toLocal() : null;
+      final key = dt != null ? DateFormat('yyyy-MM-dd').format(dt) : '__null__';
+
+      // Insert a separator whenever the date changes
+      if (key != lastDateKey) {
+        lastDateKey = key;
+        final now = DateTime.now();
+        final today = DateFormat('yyyy-MM-dd').format(now);
+        final yesterday =
+        DateFormat('yyyy-MM-dd').format(now.subtract(const Duration(days: 1)));
+
+        String label;
+        if (dt == null) {
+          label = 'Unknown Date';
+        } else if (key == today) {
+          label = 'Today — ${DateFormat('MMMM d, yyyy').format(dt)}';
+        } else if (key == yesterday) {
+          label = 'Yesterday — ${DateFormat('MMMM d, yyyy').format(dt)}';
+        } else {
+          label = DateFormat('MMMM d, yyyy').format(dt);
+        }
+
+        items.add({
+          '_separator': true,
+          'label': label,
+          'count': counts[key] ?? 0,
+        });
+      }
+      items.add(job);
+    }
+    return items;
+  }
+
+  // Builds the horizontal divider row with a centered pill showing the date and job count
+  Widget _buildDaySeparator(String label, int count) {
+    final isDark = _tk.dark;
+    final accent = _tk.green;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 8),
+      child: Row(children: [
+        Expanded(
+          child: Divider(
+            height: 1,
+            thickness: 1,
+            color: isDark
+                ? const Color(0xFF1E2E47)
+                : const Color(0xFFE2E8F0),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+          decoration: BoxDecoration(
+            color: isDark
+                ? const Color(0xFF101827)
+                : const Color(0xFFF1F5F9),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: isDark
+                  ? const Color(0xFF1E2E47)
+                  : const Color(0xFFDDE6F0),
+            ),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            // Small green dot on the left of the date label
+            Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(
+                color: accent,
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                color: isDark
+                    ? const Color(0xFFAFC4DE)
+                    : const Color(0xFF475569),
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (count > 0) ...[
+              const SizedBox(width: 5),
+              Text(
+                '· $count job${count == 1 ? '' : 's'}',
+                style: TextStyle(
+                  color: isDark
+                      ? const Color(0xFF475F7E)
+                      : const Color(0xFF94A3B8),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ]),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Divider(
+            height: 1,
+            thickness: 1,
+            color: isDark
+                ? const Color(0xFF1E2E47)
+                : const Color(0xFFE2E8F0),
+          ),
+        ),
+      ]),
+    );
+  }
+
   // Opens a dialog that lets the user pick a month and year to filter by, or choose overall
   void _showMonthYearPicker() {
     final isDark = _tk.dark;
@@ -2402,14 +2533,27 @@ class _AccomplishedScreenState extends State<AccomplishedScreen> {
                 : RefreshIndicator(
               onRefresh: _fetchAccomplishedJobs,
               color: accent,
-              // Builds each job card as the user scrolls through the list
-              child: ListView.builder(
-                padding: const EdgeInsets.only(
-                    top: 8, bottom: 24),
-                itemCount: _filteredJobs.length,
-                itemBuilder: (context, index) =>
-                    _buildCompactCard(_filteredJobs[index]),
-              ),
+              child: Builder(builder: (context) {
+                // Build the flat list with date separators injected between day groups
+                final timelineItems = _buildTimelineItems();
+                return ListView.builder(
+                  padding: const EdgeInsets.only(top: 4, bottom: 24),
+                  itemCount: timelineItems.length,
+                  itemBuilder: (context, index) {
+                    final item = timelineItems[index];
+                    // Render a day separator row for separator entries
+                    if (item is Map && item['_separator'] == true) {
+                      return _buildDaySeparator(
+                        item['label'] as String,
+                        item['count'] as int,
+                      );
+                    }
+                    // Otherwise render a normal job card
+                    return _buildCompactCard(
+                        item as Map<String, dynamic>);
+                  },
+                );
+              }),
             ),
           ),
         ],
